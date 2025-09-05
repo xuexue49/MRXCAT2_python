@@ -1,5 +1,6 @@
 import os
 import re
+from tqdm import tqdm
 import glob
 import pstats
 import cProfile
@@ -413,6 +414,183 @@ def apply_coil_sensitivities(image_3d: np.ndarray, coil_sens_maps: np.ndarray) -
     return multi_coil_image
 
 
+def _calculate_coil_centers(num_coils: int, coil_distance_mm: float, coils_per_row: int) -> tuple:
+    """
+    (辅助函数) 在圆柱体表面计算线圈中心的几何布局。
+    此函数是 MATLAB 'coilCentres' 方法的直接Python翻译。
+
+    Args:
+        num_coils (int): 总线圈数量。
+        coil_distance_mm (float): 线圈中心到扫描原点的距离 (身体半径)，单位mm。
+        coils_per_row (int): 每圈（ring）最多放置的线圈数。
+
+    Returns:
+        tuple[np.ndarray, float]:
+            - coil_centers: (num_coils, 3) 的数组，包含每个线圈的 (x, y, z) 坐标。
+            - coil_radius: 单个线圈的半径，单位mm。
+    """
+    # 预设的特定角度分布 (单位: 弧度)
+    angles = {
+        2: np.deg2rad([150, 210]),
+        3: np.deg2rad([130, 180, 230]),
+        4: np.deg2rad([150, 210, 330, 30]),
+        5: np.deg2rad([130, 180, 230, 330, 30]),
+        6: np.deg2rad([130, 180, 230, 310, 0, 50]),
+    }
+
+    # 确定线圈环（ring）的数量和每环的线圈数
+    if num_coils % coils_per_row == 0:
+        num_rings = num_coils // coils_per_row
+        coils_in_ring = [coils_per_row] * num_rings
+    else:
+        full_rings = max(num_coils // coils_per_row, 0)
+        remaining_coils = num_coils - full_rings * coils_per_row
+        if remaining_coils > coils_per_row:
+            coils_in_ring = [remaining_coils // 2, remaining_coils - (remaining_coils // 2)]
+            if full_rings > 0: coils_in_ring += [coils_per_row] * full_rings
+        else:
+            coils_in_ring = [remaining_coils] + [coils_per_row] * full_rings
+        num_rings = len(coils_in_ring)
+
+    # 根据布局计算线圈半径
+    min_angle = np.pi * 2 / max(coils_in_ring) if max(coils_in_ring) > 6 else np.deg2rad(50)
+    coil_radius = 0.5 * coil_distance_mm * min_angle
+
+    # 计算每个环的z轴坐标
+    z_coords = np.arange(-(num_rings - 1), num_rings, 2) * coil_radius
+
+    coil_centers = np.zeros((num_coils, 3))
+    coil_counter = 0
+    for i, num_c in enumerate(coils_in_ring):
+        if num_c in angles:
+            theta = angles[num_c]
+        else:
+            theta = np.linspace(0, 2 * np.pi * (num_c - 1) / num_c, num_c)
+
+        x = coil_distance_mm * np.cos(theta)
+        y = coil_distance_mm * np.sin(theta)
+
+        for j in range(num_c):
+            coil_centers[coil_counter] = [y[j], x[j], z_coords[i]]  # 注意MATLAB中x,y与常规定义相反
+            coil_counter += 1
+
+    return coil_centers, coil_radius
+
+
+def calculate_coil_sensitivities(image_shape: tuple, voxel_size_mm: tuple, num_coils: int,
+                                 coil_distance_mm: float = 450.0, coils_per_row: int = 8,
+                                 rotation_deg: tuple = (0, 0, 0),
+                                 integration_angles: int = 60) -> np.ndarray:
+    """
+    根据Biot-Savart定律计算并生成3D多线圈灵敏度图谱。
+    此函数是 MATLAB 'calculateCoilMaps' 方法的精确Python实现。
+
+    Args:
+        image_shape (tuple): 最终图像的维度 (height, width, depth)。
+        voxel_size_mm (tuple): 体素的物理尺寸 (dy, dx, dz)，单位mm。
+        num_coils (int): 要模拟的总线圈数量。
+        coil_distance_mm (float): 线圈中心到扫描原点的距离。
+        coils_per_row (int): 每圈最多放置的线圈数。
+        rotation_deg (tuple): 图像坐标系相对于线圈的旋转角度 (rot_x, rot_y, rot_z)，单位度。
+        integration_angles (int): 用于数值积分的角度步数。
+
+    Returns:
+        np.ndarray: 形状为 (height, width, depth, num_coils) 的4D复数线圈灵敏度图谱。
+    """
+    if num_coils <= 1:
+        print("线圈数为1，返回均匀灵敏度图。")
+        return np.ones(image_shape + (1,), dtype=np.complex64)
+
+    print("开始计算多线圈灵敏度图谱...")
+    # --- 1. 确定线圈的几何布局 ---
+    coil_centers, coil_radius = _calculate_coil_centers(num_coils, coil_distance_mm, coils_per_row)
+
+    # --- 2. 建立坐标系和旋转矩阵 ---
+    h, w, d = image_shape
+    dy, dx, dz = voxel_size_mm
+
+    # 创建以图像中心为原点的体素坐标网格 (单位: mm)
+    x_coords = (np.arange(w) - w / 2) * dx
+    y_coords = (np.arange(h) - h / 2) * dy
+    z_coords = (np.arange(d) - d / 2) * dz
+
+    # 创建旋转矩阵 (从度转换为弧度)
+    ax, ay, az = np.deg2rad(rotation_deg)
+    rot_x = np.array([[1, 0, 0], [0, np.cos(ax), -np.sin(ax)], [0, np.sin(ax), np.cos(ax)]])
+    rot_y = np.array([[np.cos(ay), 0, np.sin(ay)], [0, 1, 0], [-np.sin(ay), 0, np.cos(ay)]])
+    rot_z = np.array([[np.cos(az), -np.sin(az), 0], [np.sin(az), np.cos(az), 0], [0, 0, 1]])
+    # 注意MATLAB中的旋转顺序是 rotx*rotz*roty
+    inv_rotation_matrix = np.linalg.inv(rot_x @ rot_z @ rot_y)
+
+    # --- 3. 准备数值积分参数 ---
+    d_theta = 2 * np.pi / integration_angles
+    theta = np.arange(-np.pi, np.pi, d_theta)
+    cos_theta = np.cos(theta)
+    sin_theta = np.sin(theta)
+
+    # --- 4. 逐个线圈计算灵敏度 ---
+    sensitivity_maps = np.zeros(image_shape + (num_coils,), dtype=np.complex64)
+
+    # 创建三维坐标网格
+    Y, X, Z = np.meshgrid(y_coords, x_coords, z_coords, indexing='ij')
+
+    # 将网格坐标向量化并应用旋转
+    coords_vec = np.vstack([X.ravel(), Y.ravel(), Z.ravel()])
+    rotated_coords = inv_rotation_matrix @ coords_vec
+
+    for i in tqdm(range(num_coils), desc="计算线圈灵敏度"):
+        coil_center = coil_centers[i]
+
+        # 计算旋转后坐标相对于线圈中心的偏移
+        Xc = rotated_coords[0, :].reshape(h, w, d) - coil_center[0]
+        Yc = rotated_coords[1, :].reshape(h, w, d) - coil_center[1]
+        Zc = rotated_coords[2, :].reshape(h, w, d) - coil_center[2]
+
+        # 将3D数组扩展到4D以进行theta积分
+        Xc = Xc[..., np.newaxis]
+        Yc = Yc[..., np.newaxis]
+        Zc = Zc[..., np.newaxis]
+
+        # --- 5. 应用Biot-Savart定律 ---
+        # MATLAB代码中的 y 和 x 与常规定义相反，这里已在coil_centers中处理
+        # Biot-Savart 分母
+        denominator = (coil_radius ** 2 + Xc ** 2 + Yc ** 2 + Zc ** 2 -
+                       2 * coil_radius * (Yc * cos_theta + Zc * sin_theta))
+        denominator = np.power(np.abs(denominator), 1.5)
+        denominator[denominator == 0] = 1e-9  # 避免除零
+
+        # Biot-Savart 分子 (x, y, z分量)
+        coil_angle = np.arctan2(coil_center[1], coil_center[0])
+        sin_a, cos_a = np.sin(coil_angle), np.cos(coil_angle)
+
+        nom_x = coil_radius * (Yc * cos_theta + Zc * sin_theta * cos_a - coil_radius * cos_a)
+        nom_y = coil_radius * (-Xc * cos_theta + Zc * sin_theta * sin_a - coil_radius * sin_a)
+        nom_z = coil_radius * (-Yc * sin_theta * sin_a - Xc * sin_theta * cos_a)
+
+        # 数值积分 (对theta维度求和)
+        sx = d_theta * np.sum(nom_x / denominator, axis=-1)
+        sy = d_theta * np.sum(nom_y / denominator, axis=-1)
+        sz = d_theta * np.sum(nom_z / denominator, axis=-1)
+
+        # --- 6. 计算复数灵敏度 ---
+        # 计算yz平面上的角度
+        ang_y = sin_a * (Xc[..., 0] + coil_center[0]) - cos_a * (Yc[..., 0] + coil_center[1])
+        ang_z = Zc[..., 0]
+        yz_angle = np.angle(ang_y + 1j * ang_z)
+
+        complex_sens = (cos_a * sx + sin_a * sy +
+                        1j * ((-sin_a * sx + cos_a * sy) * np.cos(yz_angle) + sz * np.sin(yz_angle)))
+
+        sensitivity_maps[..., i] = complex_sens
+
+    # --- 7. 归一化 ---
+    mean_sens = np.mean(sensitivity_maps[sensitivity_maps != 0])
+    sensitivity_maps /= mean_sens
+
+    print("线圈灵敏度图谱计算完成。")
+    return sensitivity_maps
+
+
 if __name__ == "__main__":
     # --- 1. 配置图像和路径参数 ---
     # 图像元数据
@@ -430,8 +608,12 @@ if __name__ == "__main__":
     output_dir = os.path.join(base_path, case_name, "mask")
     log_path = os.path.join(base_path, case_name, "log")
 
+    # 读取生成参数
     dims, voxel_size = parse_xcat_log_from_path(log_path)
+
+    # 生成静态参数
     lookup_table, max_vals_dict = create_tissue_property_lookup_table()
+    coil_maps = calculate_coil_sensitivities(dims, voxel_size, 8)
 
     # --- 2. 自动扫描并处理文件 ---
     # 检查输入目录是否存在
@@ -473,6 +655,10 @@ if __name__ == "__main__":
 
         image = generate_bssfp_signal(pd, t1, t2)
         image = apply_low_pass_filter(image, filter_strength=1.5)
+
+
+
+        #        image = apply_coil_sensitivities(image, coil_sens_maps=t2s)
 
         save_numpy_as_nifti(numpy_array=image, output_path=output_filename, voxel_size=voxel_size)
 
