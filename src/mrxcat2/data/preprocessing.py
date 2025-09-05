@@ -204,65 +204,145 @@ def simplify_xcat_labels(xcat_array: np.ndarray) -> np.ndarray:
     return simplified_array
 
 
-def assign_tissue_properties(simplified_array: np.ndarray, property_set: str = 'ours') -> tuple:
+def create_tissue_property_lookup_table(property_set: str = 'xcat', normalize: bool = False) -> tuple:
     """
-    为简化后的体模类别分配初步的、平滑的组织物理属性值。
+    创建组织属性的查找表 (Lookup Table)。
+    此函数封装了所有物理参数的定义和计算，应在循环或多次调用前执行一次。
 
     Args:
-        simplified_array (np.ndarray): 由 simplify_xcat_labels 函数生成的、包含7个类别标签的数组。
-        property_set (str, optional): 使用哪一套物理属性值，可选值为 'ours' 或 'xcat'。
-                                      默认为 'ours'。
+        property_set (str, optional): 使用哪一套物理属性值，可选 'ours' 或 'xcat'。默认为 'ours'。
+        normalize (bool, optional): 是否返回归一化的属性值。
+                                    - True: 返回 [0, 1] 范围内的归一化值。
+                                    - False: 返回物理单位的真实值 (PD in %, T1/T2 in ms)。
+                                    默认为 True。
+
+    Returns:
+        tuple[np.ndarray, dict]:
+            - 第一个元素是 (7, 4) 的Numpy数组，作为查找表。
+            - 第二个元素是一个包含最大值的字典，用于可能的后续计算。
+    """
+    print(f"正在创建 '{property_set}' 属性集的查找表 (Normalized: {normalize})...")
+
+    # 定义两套物理属性的原始值和最大值
+    # [cite_start]从 phantomModel.py 中提取的物理属性值 [cite: 2]
+    raw_values = {
+        'ours': {
+            'max_values': {'pd': 100., 't1': 1400., 't2': 285., 't2s': 70.},
+            'properties': np.array([
+                [88., 1000., 43., 28.],  # 0: Muscle
+                [79., 1387., 280., 66.],  # 1: Blood
+                [34., 1171., 61., 1.],  # 2: Air
+                [87., 661., 57., 34.],  # 3: Liver
+                [60., 250., 70., 39.],  # 4: Fat
+                [71., 250., 20., 1.],  # 5: Bone
+                [65., 750., 60., 30.]  # 6: Unknown
+            ])
+        },
+        'xcat': {
+            'max_values': {'pd': 100., 't1': 1300., 't2': 105., 't2s': 55.},
+            'properties': np.array([
+                [80., 900., 50., 31.],  # 0: Muscle
+                [95., 1200., 100., 50.],  # 1: Blood
+                [34., 1171., 61., 1.],  # 2: Air
+                [90., 800., 50., 31.],  # 3: Liver
+                [70., 350., 30., 20.],  # 4: Fat
+                [12., 250., 20., 1.],  # 5: Bone
+                [70., 700., 50., 30.]  # 6: Unknown
+            ])
+        }
+    }
+    # [cite_end]
+
+    if property_set not in raw_values:
+        raise ValueError(f"属性集 '{property_set}' 无效, 请选择 'ours' 或 'xcat'。")
+
+    selected_set = raw_values[property_set]
+    lookup_table = selected_set['properties']
+    max_vals_dict = selected_set['max_values']
+
+    if normalize:
+        # 创建一个 (1, 4) 的数组用于广播除法
+        max_vals_array = np.array([max_vals_dict['pd'], max_vals_dict['t1'], max_vals_dict['t2'], max_vals_dict['t2s']])
+        lookup_table = lookup_table / max_vals_array
+
+    return lookup_table, max_vals_dict
+
+
+def assign_tissue_properties(simplified_array: np.ndarray, lookup_table: np.ndarray) -> tuple:
+    """
+    (高效版) 使用预先计算好的查找表为简化体模分配组织属性。
+    此函数只执行核心的、高速的Numpy索引映射操作。
+
+    Args:
+        simplified_array (np.ndarray): 包含7个类别标签的数组 (值为 0-6)。
+        lookup_table (np.ndarray): 由 create_tissue_property_lookup_table 函数生成的 (7, 4) 查找表。
 
     Returns:
         tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
             返回一个包含四个Numpy数组的元组 (PD, T1, T2, T2*)。
     """
-    print(f"开始使用 '{property_set}' 属性集分配组织属性 (优化版)...")
     if not isinstance(simplified_array, np.ndarray):
-        raise TypeError("输入必须是一个Numpy数组。")
+        raise TypeError("输入 simplified_array 必须是一个Numpy数组。")
+    if not (isinstance(lookup_table, np.ndarray) and lookup_table.shape == (7, 4)):
+        raise ValueError("lookup_table 必须是一个 (7, 4) 的Numpy数组。")
 
-    # [cite_start]从 phantomModel.py 中提取的物理属性值 [cite: 2]
-    # 将属性值直接定义为Numpy数组，作为查找表 (Lookup Table)
-    tissue_property_values = {}
-    pd_max_ours, t1_max_ours, t2_max_ours, t2star_max_ours = 100., 1400., 285., 70.
-    tissue_property_values['ours'] = np.array([
-        [88. / pd_max_ours, 1000. / t1_max_ours, 43. / t2_max_ours, 28. / t2star_max_ours],  # 0: Muscle
-        [79. / pd_max_ours, 1387. / t1_max_ours, 280. / t2_max_ours, 66. / t2star_max_ours],  # 1: Blood
-        [34. / pd_max_ours, 1171. / t1_max_ours, 61. / t2_max_ours, 1. / t2star_max_ours],  # 2: Air
-        [87. / pd_max_ours, 661. / t1_max_ours, 57. / t2_max_ours, 34. / t2star_max_ours],  # 3: Liver
-        [60. / pd_max_ours, 250. / t1_max_ours, 70. / t2_max_ours, 39. / t2star_max_ours],  # 4: Fat
-        [71. / pd_max_ours, 250. / t1_max_ours, 20. / t2_max_ours, 1. / t2star_max_ours],  # 5: Bone
-        [65. / pd_max_ours, 750. / t1_max_ours, 60 / t2_max_ours, 30. / t2star_max_ours]  # 6: Unknown
-    ])
+    # --- 核心操作: 使用高级索引进行高速映射 ---
+    tpm_array = lookup_table[simplified_array]
 
-    pd_max_xcat, t1_max_xcat, t2_max_xcat, t2star_max_xcat = 100., 1300., 105., 55.
-    tissue_property_values['xcat'] = np.array([
-        [80. / pd_max_xcat, 900. / t1_max_xcat, 50. / t2_max_xcat, 31. / t2star_max_xcat],  # 0: Muscle
-        [95. / pd_max_xcat, 1200. / t1_max_xcat, 100. / t2_max_xcat, 50. / t2star_max_xcat],  # 1: Blood
-        [34. / pd_max_xcat, 1171. / t1_max_xcat, 61. / t2_max_xcat, 1. / t2star_max_xcat],  # 2: Air
-        [90. / pd_max_xcat, 800. / t1_max_xcat, 50. / t2_max_xcat, 31. / t2star_max_xcat],  # 3: Liver
-        [70. / pd_max_xcat, 350. / t1_max_xcat, 30. / t2_max_xcat, 20. / t2star_max_xcat],  # 4: Fat
-        [12. / pd_max_xcat, 250. / t1_max_xcat, 20. / t2_max_xcat, 1. / t2star_max_xcat],  # 5: Bone
-        [70. / pd_max_xcat, 700. / t1_max_xcat, 50 / t2_max_xcat, 30. / t2star_max_xcat]  # 6: Unknown
-    ])
-    # [cite_end]
-
-    if property_set not in tissue_property_values:
-        raise ValueError(f"属性集 '{property_set}' 无效, 请选择 'ours' 或 'xcat'。")
-
-    # 选择要使用的属性查找表
-    properties_lookup_table = tissue_property_values[property_set]
-
-    # --- 核心优化 ---
-    # 使用 simplified_array (值为0-6) 作为索引，
-    # 直接从 properties_lookup_table (形状为 7x4) 中为每个像素查找对应的4个属性值。
-    # NumPy会自动将结果广播到正确的输出形状 (height, width, depth, 4)。
-    tpm_array = properties_lookup_table[simplified_array]
-
-    print("组织属性分配完成。")
-
-    # 返回分离后的四个属性图，与原函数输出保持一致
+    # 返回分离后的四个属性图
     return tpm_array[..., 0], tpm_array[..., 1], tpm_array[..., 2], tpm_array[..., 3]
+
+
+def generate_bssfp_signal(pd: np.ndarray, t1: np.ndarray, t2: np.ndarray, tr: float = 3.0, te: float = 1.5,
+                          flip_angle_deg: float = 60) -> np.ndarray:
+    """
+    根据给定的组织属性图(PD, T1, T2)和MR序列参数，使用bSSFP信号模型生成MR图像。
+
+    此函数是一个纯粹的计算模块，不涉及任何体模或标签的转换。
+    信号方程与 MRXCAT_CMR_CINE.m 中的模型一致。
+
+    Args:
+        pd (np.ndarray): 质子密度图 (Proton Density)，单位为百分比(%)。
+        t1 (np.ndarray): T1弛豫时间图，单位为毫秒 (ms)。
+        t2 (np.ndarray): T2弛豫时间图，单位为毫秒 (ms)。
+        tr (float): 重复时间 (Repetition Time)，单位为毫秒 (ms)。
+        te (float): 回波时间 (Echo Time)，单位为毫秒 (ms)。
+        flip_angle_deg (float): 翻转角 (Flip Angle)，单位为度 (degrees)。
+
+    Returns:
+        np.ndarray: 模拟生成的、代表信号强度的灰度MR图像。
+    """
+    print(f"开始应用 bSSFP 信号模型 (TR={tr}ms, TE={te}ms, Flip Angle={flip_angle_deg}°)...")
+
+    # --- 输入验证 ---
+    if not (pd.shape == t1.shape == t2.shape):
+        raise ValueError("输入的PD, T1, T2数组必须具有相同的形状。")
+
+    # --- 步骤 1: 预处理输入，防止计算错误 ---
+    # 创建输入的副本以避免修改原始数组
+    t1_proc = t1.copy()
+    t2_proc = t2.copy()
+
+    # 防止T1/T2出现零值，避免后续计算中出现除零错误
+    t1_proc[t1_proc == 0] = 1e-9
+    t2_proc[t2_proc == 0] = 1e-9
+
+    # --- 步骤 2: 应用平衡稳态自由进动 (bSSFP) 信号模型 ---
+    # 将翻转角从度转换为弧度
+    flip_angle_rad = np.deg2rad(flip_angle_deg)
+
+    # 计算信号强度:
+    # S = PD * sin(alpha) * exp(-TE/T2) / ( (T1/T2 + 1) - cos(alpha) * (T1/T2 - 1) )
+    numerator = pd * np.sin(flip_angle_rad) * np.exp(-te / t2_proc)
+    denominator = (t1_proc / t2_proc + 1) - np.cos(flip_angle_rad) * (t1_proc / t2_proc - 1)
+
+    # 再次检查分母，防止在特定翻转角和T1/T2比值下出现零
+    denominator[denominator == 0] = 1e-9
+
+    signal_image = numerator / denominator
+
+    print("信号模拟完成。")
+    return signal_image
 
 
 if __name__ == "__main__":
@@ -283,6 +363,7 @@ if __name__ == "__main__":
     log_path = os.path.join(base_path, case_name, "log")
 
     dims, voxel_size = parse_xcat_log_from_path(log_path)
+    lookup_table, max_vals_dict = create_tissue_property_lookup_table()
 
     # --- 2. 自动扫描并处理文件 ---
     # 检查输入目录是否存在
@@ -318,11 +399,26 @@ if __name__ == "__main__":
         else:
             print(f"成功加载矩阵，Shape: {image_matrix.shape}, Dtype: {image_matrix.dtype}")
 
-        # 处理逻辑
+        # 图像生成逻辑
         image_matrix = simplify_xcat_labels(image_matrix)
-        pd, t1, t2, t2s = assign_tissue_properties(image_matrix)
+        pd, t1, t2, t2s = assign_tissue_properties(image_matrix, lookup_table)
 
-        save_numpy_as_nifti(numpy_array=image_matrix, output_path=output_filename, voxel_size=voxel_size)
+        image = generate_bssfp_signal(pd, t1, t2)
+
+        save_numpy_as_nifti(numpy_array=image, output_path=output_filename, voxel_size=voxel_size)
+
+        # # 保存矩阵
+        # pd_filename = os.path.join(output_dir, f'pd/{filename_without_ext}.nii.gz')
+        # save_numpy_as_nifti(numpy_array=pd, output_path=pd_filename, voxel_size=voxel_size)
+        #
+        # t1_filename = os.path.join(output_dir, f't1/{filename_without_ext}.nii.gz')
+        # save_numpy_as_nifti(numpy_array=t1, output_path=t1_filename, voxel_size=voxel_size)
+        #
+        # t2_filename = os.path.join(output_dir, f't2/{filename_without_ext}.nii.gz')
+        # save_numpy_as_nifti(numpy_array=t2, output_path=t2_filename, voxel_size=voxel_size)
+        #
+        # t2s_filename = os.path.join(output_dir, f't2s/{filename_without_ext}.nii.gz')
+        # save_numpy_as_nifti(numpy_array=t2s, output_path=t2s_filename, voxel_size=voxel_size)
 
     profiler.disable()
 
