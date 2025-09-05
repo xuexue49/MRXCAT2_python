@@ -152,6 +152,115 @@ def parse_xcat_log_from_path(log_path: str):
     return dims, voxel_size
 
 
+def simplify_xcat_labels(xcat_array: np.ndarray) -> np.ndarray:
+    """
+    将XCAT体模中数十个详细的组织标签简化为7个主要类别。
+    该函数逻辑完全基于 phantomModel.py 文件中的 Phantom 类。
+
+    类别映射关系:
+    - 0: Muscle (肌肉)
+    - 1: Blood (血液)
+    - 2: Air (空气)
+    - 3: Liver (肝脏)
+    - 4: Fat (脂肪)
+    - 5: Bone (骨骼)
+    - 6: Unknown (未知/其他)
+
+    Args:
+        xcat_array (np.ndarray): 包含原始XCAT详细标签的Numpy数组。
+
+    Returns:
+        np.ndarray: 包含7个简化类别标签的Numpy数组。
+    """
+    print("开始简化XCAT标签...")
+    if not isinstance(xcat_array, np.ndarray):
+        raise TypeError("输入必须是一个Numpy数组。")
+
+    # [cite_start]根据 phantomModel.py 中的定义，为不同组织创建布尔掩码 [cite: 2]
+    muscle_mask = np.sum([xcat_array == i for i in [1, 2, 3, 4, 10]], axis=0) > 0
+    blood_mask = np.sum([xcat_array == i for i in [5, 6, 7, 8]], axis=0) > 0
+    air_mask = np.sum([xcat_array == i for i in [0, 15, 16]], axis=0) > 0
+    liver_mask = np.sum([xcat_array == i for i in [13, 40, 41, 42, 43, 52]], axis=0) > 0
+    fat_mask = np.sum([xcat_array == i for i in [50, 99]], axis=0) > 0
+    bone_mask = np.sum([xcat_array == i for i in [31, 32, 33, 34, 35, 51]], axis=0) > 0
+
+    # [cite_start]任何不属于上述已知类别的体素都将被标记为“未知” [cite: 2]
+    known_mask = air_mask | muscle_mask | blood_mask | bone_mask | fat_mask | liver_mask
+    unknown_mask = ~known_mask
+
+    # 创建一个新的数组来存储简化后的标签
+    # [cite_start]默认值为0 (Muscle)，然后用其他类别的值覆盖 [cite: 2]
+    simplified_array = np.zeros_like(xcat_array, dtype=np.int32)
+    simplified_array[blood_mask] = 1
+    simplified_array[air_mask] = 2
+    simplified_array[liver_mask] = 3
+    simplified_array[fat_mask] = 4
+    simplified_array[bone_mask] = 5
+    simplified_array[unknown_mask] = 6
+
+    print("标签简化完成。")
+    return simplified_array
+
+
+def assign_tissue_properties(simplified_array: np.ndarray, property_set: str = 'ours') -> np.ndarray:
+    """
+    为简化后的体模类别分配初步的、平滑的组织物理属性值。
+    该函数逻辑和物理参数值完全基于 phantomModel.py 文件。
+
+    Args:
+        simplified_array (np.ndarray): 由 simplify_xcat_labels 函数生成的、包含7个类别标签的数组。
+        property_set (str, optional): 使用哪一套物理属性值，可选值为 'ours' 或 'xcat'。
+                                      默认为 'ours'。
+
+    Returns:
+        np.ndarray: 一个形状为 (..., 4) 的数组，最后一维代表归一化后的 [PD, T1, T2, T2*]。
+    """
+    print(f"开始使用 '{property_set}' 属性集分配组织属性...")
+    if not isinstance(simplified_array, np.ndarray):
+        raise TypeError("输入必须是一个Numpy数组。")
+
+    # [cite_start]从 phantomModel.py 中提取的物理属性值 [cite: 2]
+    tissue_property_values = {}
+    pd_max_ours, t1_max_ours, t2_max_ours, t2star_max_ours = 100., 1400., 285., 70.
+    tissue_property_values['ours'] = [
+        np.array([88. / pd_max_ours, 1000. / t1_max_ours, 43. / t2_max_ours, 28. / t2star_max_ours]),  # 0: Muscle
+        np.array([79. / pd_max_ours, 1387. / t1_max_ours, 280. / t2_max_ours, 66. / t2star_max_ours]),  # 1: Blood
+        np.array([34. / pd_max_ours, 1171. / t1_max_ours, 61. / t2_max_ours, 1. / t2star_max_ours]),  # 2: Air
+        np.array([87. / pd_max_ours, 661. / t1_max_ours, 57. / t2_max_ours, 34. / t2star_max_ours]),  # 3: Liver
+        np.array([60. / pd_max_ours, 250. / t1_max_ours, 70. / t2_max_ours, 39. / t2star_max_ours]),  # 4: Fat
+        np.array([71. / pd_max_ours, 250. / t1_max_ours, 20. / t2_max_ours, 1. / t2star_max_ours]),  # 5: Bone
+        np.array([65. / pd_max_ours, 750. / t1_max_ours, 60 / t2_max_ours, 30. / t2star_max_ours])  # 6: Unknown
+    ]
+
+    pd_max_xcat, t1_max_xcat, t2_max_xcat, t2star_max_xcat = 100., 1300., 105., 55.
+    tissue_property_values['xcat'] = [
+        np.array([80. / pd_max_xcat, 900. / t1_max_xcat, 50. / t2_max_xcat, 31. / t2star_max_xcat]),  # 0: Muscle
+        np.array([95. / pd_max_xcat, 1200. / t1_max_xcat, 100. / t2_max_xcat, 50. / t2star_max_xcat]),  # 1: Blood
+        np.array([34. / pd_max_xcat, 1171. / t1_max_xcat, 61. / t2_max_xcat, 1. / t2star_max_xcat]),  # 2: Air
+        np.array([90. / pd_max_xcat, 800. / t1_max_xcat, 50. / t2_max_xcat, 31. / t2star_max_xcat]),  # 3: Liver
+        np.array([70. / pd_max_xcat, 350. / t1_max_xcat, 30. / t2_max_xcat, 20. / t2star_max_xcat]),  # 4: Fat
+        np.array([12. / pd_max_xcat, 250. / t1_max_xcat, 20. / t2_max_xcat, 1. / t2star_max_xcat]),  # 5: Bone
+        np.array([70. / pd_max_xcat, 700. / t1_max_xcat, 50 / t2_max_xcat, 30. / t2star_max_xcat])  # 6: Unknown
+    ]
+
+    if property_set not in tissue_property_values:
+        raise ValueError(f"属性集 '{property_set}' 无效, 请选择 'ours' 或 'xcat'。")
+
+    properties = tissue_property_values[property_set]
+
+    # 创建一个用于存储组织属性图 (Tissue Property Map, TPM) 的空数组
+    # 形状为 (height, width, depth, 4)
+    tpm_array = np.zeros(simplified_array.shape + (4,), dtype=float)
+
+    # [cite_start]使用Numpy广播机制高效地为每个类别赋值 [cite: 2]
+    for class_index in range(7):
+        # 找到所有等于当前类别索引的像素，并乘以对应的物理属性向量
+        tpm_array += (simplified_array[..., None] == class_index) * properties[class_index]
+
+    print("组织属性分配完成。")
+    return tpm_array
+
+
 if __name__ == "__main__":
     # --- 1. 配置图像和路径参数 ---
     # 图像元数据
@@ -168,8 +277,6 @@ if __name__ == "__main__":
     log_path = os.path.join(base_path, case_name, "log")
 
     dims, voxel_size = parse_xcat_log_from_path(log_path)
-
-    #    dims =
 
     # --- 2. 自动扫描并处理文件 ---
     # 检查输入目录是否存在
@@ -206,6 +313,8 @@ if __name__ == "__main__":
                 # 检查矩阵是否成功加载，然后保存
                 if image_matrix is not None:
                     print(f"成功加载矩阵，Shape: {image_matrix.shape}, Dtype: {image_matrix.dtype}")
+
+                    image_matrix = simplify_xcat_labels(image_matrix)
 
                     save_numpy_as_nifti(
                         numpy_array=image_matrix,
