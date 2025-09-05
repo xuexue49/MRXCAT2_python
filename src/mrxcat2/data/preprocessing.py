@@ -363,7 +363,7 @@ def apply_low_pass_filter(image_3d: np.ndarray, filter_strength: float = 1.5) ->
     """
     print(f"开始应用低通滤波 (模糊)，强度: {filter_strength}...")
     if image_3d.ndim != 3:
-        raise ValueError("输入图像必须是3D数组 (height, width, depth)。")
+        raise ValueError("输入图像必须是3D数组 (depth, height, width)。")
 
     # 创建一个圆盘形状的卷积核 (disk kernel)
     radius = int(filter_strength)
@@ -375,8 +375,8 @@ def apply_low_pass_filter(image_3d: np.ndarray, filter_strength: float = 1.5) ->
     blurred_image = np.zeros_like(image_3d, dtype=image_3d.dtype)
 
     # 对每个2D切片独立应用卷积
-    for i in range(image_3d.shape[2]):
-        blurred_image[..., i] = convolve(image_3d[..., i], kernel, mode='reflect')
+    for i in range(image_3d.shape[0]):
+        blurred_image[i, ...] = convolve(image_3d[i, ...], kernel, mode='reflect')
 
     print("低通滤波完成。")
     return blurred_image
