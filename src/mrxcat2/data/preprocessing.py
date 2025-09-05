@@ -260,7 +260,7 @@ def assign_tissue_properties(simplified_array: np.ndarray, property_set: str = '
         tpm_array += (simplified_array[..., None] == class_index) * properties[class_index]
 
     print("组织属性分配完成。")
-    return tpm_array
+    return tpm_array[..., 0], tpm_array[..., 1], tpm_array[..., 2], tpm_array[..., 3]
 
 
 if __name__ == "__main__":
@@ -308,22 +308,18 @@ if __name__ == "__main__":
         print(f"\n--- 正在处理: {base_filename} ---")
 
         # 加载bin文件为Numpy矩阵
-        image_matrix = load_bin_as_numpy(
-            bin_path=input_filename,
-            dims=dims,
-            numpy_dtype=numpy_dtype
-        )
+        image_matrix = load_bin_as_numpy(bin_path=input_filename, dims=dims, numpy_dtype=numpy_dtype)
 
-        # 检查矩阵是否成功加载，然后保存
-        if image_matrix is not None:
+        # 检查矩阵是否成功加载
+        if image_matrix is None:
+            raise f"未能成功加载矩阵"
+        else:
             print(f"成功加载矩阵，Shape: {image_matrix.shape}, Dtype: {image_matrix.dtype}")
 
-            image_matrix = simplify_xcat_labels(image_matrix)
+        # 处理逻辑
+        image_matrix = simplify_xcat_labels(image_matrix)
+        pd, t1, t2, t2s = assign_tissue_properties(image_matrix)
 
-            save_numpy_as_nifti(
-                numpy_array=image_matrix,
-                output_path=output_filename,
-                voxel_size=voxel_size
-            )
+        save_numpy_as_nifti(numpy_array=image_matrix, output_path=output_filename, voxel_size=voxel_size)
 
     profiler.disable()
