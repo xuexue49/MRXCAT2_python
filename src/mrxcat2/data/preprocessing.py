@@ -1,12 +1,14 @@
 import os
 import re
-from tqdm import tqdm
+import torch
 import glob
 import pstats
 import cProfile
-import numpy as np
+from tqdm import tqdm
 import nibabel as nib
 from scipy.ndimage import convolve
+
+import numpy as np
 
 
 def load_bin_as_numpy(bin_path, dims, numpy_dtype='<f4'):
@@ -403,6 +405,7 @@ def apply_coil_sensitivities(image_3d: np.ndarray, coil_sens_maps: np.ndarray) -
     if image_3d.ndim != 3 or coil_sens_maps.ndim != 4:
         raise ValueError("输入图像必须是3D，线圈图谱必须是4D。")
     if image_3d.shape != coil_sens_maps.shape[:-1]:
+        print(image_3d.shape, coil_sens_maps.shape[:-1])
         raise ValueError("图像和线圈图谱的空间维度必须匹配。")
 
     # 使用NumPy的广播机制 (broadcasting) 高效地完成操作
@@ -447,7 +450,8 @@ def _calculate_coil_centers(num_coils: int, coil_distance_mm: float, coils_per_r
         remaining_coils = num_coils - full_rings * coils_per_row
         if remaining_coils > coils_per_row:
             coils_in_ring = [remaining_coils // 2, remaining_coils - (remaining_coils // 2)]
-            if full_rings > 0: coils_in_ring += [coils_per_row] * full_rings
+            if full_rings > 0:
+                coils_in_ring += [coils_per_row] * full_rings
         else:
             coils_in_ring = [remaining_coils] + [coils_per_row] * full_rings
         num_rings = len(coils_in_ring)
@@ -477,10 +481,10 @@ def _calculate_coil_centers(num_coils: int, coil_distance_mm: float, coils_per_r
     return coil_centers, coil_radius
 
 
-def calculate_coil_sensitivities(image_shape: tuple, voxel_size_mm: tuple, num_coils: int,
-                                 coil_distance_mm: float = 450.0, coils_per_row: int = 8,
-                                 rotation_deg: tuple = (0, 0, 0),
-                                 integration_angles: int = 60) -> np.ndarray:
+def calculate_coil_sensitivities(
+        image_shape: tuple, voxel_size_mm: tuple, num_coils: int, coil_distance_mm: float = 450.0,
+        coils_per_row: int = 8, rotation_deg: tuple = (0, 0, 0), integration_angles: int = 60
+) -> np.ndarray:
     """
     根据Biot-Savart定律计算并生成3D多线圈灵敏度图谱。
     此函数是 MATLAB 'calculateCoilMaps' 方法的精确Python实现。
@@ -497,98 +501,92 @@ def calculate_coil_sensitivities(image_shape: tuple, voxel_size_mm: tuple, num_c
     Returns:
         np.ndarray: 形状为 (height, width, depth, num_coils) 的4D复数线圈灵敏度图谱。
     """
-    if num_coils <= 1:
-        print("线圈数为1，返回均匀灵敏度图。")
-        return np.ones(image_shape + (1,), dtype=np.complex64)
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is not available. This function requires a PyTorch installation with GPU support.")
+    device = torch.device("cuda")
+    print(f"开始在GPU ({torch.cuda.get_device_name(device)}) 上计算 {num_coils} 个线圈的灵敏度图谱...")
 
-    print("开始计算多线圈灵敏度图谱...")
-    # --- 1. 确定线圈的几何布局 ---
+    if num_coils <= 1:
+        # 调整输出以匹配 (z, y, x, coils)
+        return np.ones((image_shape[2], image_shape[0], image_shape[1], 1), dtype=np.complex64)
+
+    # --- CPU上的初始设置 ---
     coil_centers, coil_radius = _calculate_coil_centers(num_coils, coil_distance_mm, coils_per_row)
 
-    # --- 2. 建立坐标系和旋转矩阵 ---
     h, w, d = image_shape
     dy, dx, dz = voxel_size_mm
-
-    # 创建以图像中心为原点的体素坐标网格 (单位: mm)
     x_coords = (np.arange(w) - w / 2) * dx
     y_coords = (np.arange(h) - h / 2) * dy
     z_coords = (np.arange(d) - d / 2) * dz
 
-    # 创建旋转矩阵 (从度转换为弧度)
     ax, ay, az = np.deg2rad(rotation_deg)
     rot_x = np.array([[1, 0, 0], [0, np.cos(ax), -np.sin(ax)], [0, np.sin(ax), np.cos(ax)]])
     rot_y = np.array([[np.cos(ay), 0, np.sin(ay)], [0, 1, 0], [-np.sin(ay), 0, np.cos(ay)]])
     rot_z = np.array([[np.cos(az), -np.sin(az), 0], [np.sin(az), np.cos(az), 0], [0, 0, 1]])
-    # 注意MATLAB中的旋转顺序是 rotx*rotz*roty
     inv_rotation_matrix = np.linalg.inv(rot_x @ rot_z @ rot_y)
 
-    # --- 3. 准备数值积分参数 ---
     d_theta = 2 * np.pi / integration_angles
     theta = np.arange(-np.pi, np.pi, d_theta)
-    cos_theta = np.cos(theta)
-    sin_theta = np.sin(theta)
 
-    # --- 4. 逐个线圈计算灵敏度 ---
-    sensitivity_maps = np.zeros(image_shape + (num_coils,), dtype=np.complex64)
-
-    # 创建三维坐标网格
+    # --- 数据迁移到GPU ---
     Y, X, Z = np.meshgrid(y_coords, x_coords, z_coords, indexing='ij')
-
-    # 将网格坐标向量化并应用旋转
     coords_vec = np.vstack([X.ravel(), Y.ravel(), Z.ravel()])
     rotated_coords = inv_rotation_matrix @ coords_vec
 
-    for i in tqdm(range(num_coils), desc="计算线圈灵敏度"):
-        coil_center = coil_centers[i]
+    rotated_coords_gpu = torch.from_numpy(rotated_coords).float().to(device)
+    cos_theta_gpu = torch.from_numpy(np.cos(theta)).float().to(device)
+    sin_theta_gpu = torch.from_numpy(np.sin(theta)).float().to(device)
 
-        # 计算旋转后坐标相对于线圈中心的偏移
-        Xc = rotated_coords[0, :].reshape(h, w, d) - coil_center[0]
-        Yc = rotated_coords[1, :].reshape(h, w, d) - coil_center[1]
-        Zc = rotated_coords[2, :].reshape(h, w, d) - coil_center[2]
+    sensitivity_maps = torch.zeros(image_shape + (num_coils,), dtype=torch.complex64, device=device)
 
-        # 将3D数组扩展到4D以进行theta积分
-        Xc = Xc[..., np.newaxis]
-        Yc = Yc[..., np.newaxis]
-        Zc = Zc[..., np.newaxis]
+    # --- 在GPU上循环计算 ---
+    for i in tqdm(range(num_coils), desc="在GPU上计算线圈"):
+        coil_center = torch.from_numpy(coil_centers[i]).float().to(device)
 
-        # --- 5. 应用Biot-Savart定律 ---
-        # MATLAB代码中的 y 和 x 与常规定义相反，这里已在coil_centers中处理
-        # Biot-Savart 分母
+        Xc = rotated_coords_gpu[0, :].view(h, w, d) - coil_center[0]
+        Yc = rotated_coords_gpu[1, :].view(h, w, d) - coil_center[1]
+        Zc = rotated_coords_gpu[2, :].view(h, w, d) - coil_center[2]
+
+        Xc = Xc.unsqueeze(-1)
+        Yc = Yc.unsqueeze(-1)
+        Zc = Zc.unsqueeze(-1)
+
         denominator = (coil_radius ** 2 + Xc ** 2 + Yc ** 2 + Zc ** 2 -
-                       2 * coil_radius * (Yc * cos_theta + Zc * sin_theta))
-        denominator = np.power(np.abs(denominator), 1.5)
-        denominator[denominator == 0] = 1e-9  # 避免除零
+                       2 * coil_radius * (Yc * cos_theta_gpu + Zc * sin_theta_gpu))
+        denominator = torch.pow(torch.abs(denominator), 1.5)
+        denominator[denominator == 0] = 1e-9
 
-        # Biot-Savart 分子 (x, y, z分量)
-        coil_angle = np.arctan2(coil_center[1], coil_center[0])
-        sin_a, cos_a = np.sin(coil_angle), np.cos(coil_angle)
+        coil_angle = torch.atan2(coil_center[1], coil_center[0])
+        sin_a, cos_a = torch.sin(coil_angle), torch.cos(coil_angle)
 
-        nom_x = coil_radius * (Yc * cos_theta + Zc * sin_theta * cos_a - coil_radius * cos_a)
-        nom_y = coil_radius * (-Xc * cos_theta + Zc * sin_theta * sin_a - coil_radius * sin_a)
-        nom_z = coil_radius * (-Yc * sin_theta * sin_a - Xc * sin_theta * cos_a)
+        nom_x = coil_radius * (Yc * cos_theta_gpu + Zc * sin_theta_gpu * cos_a - coil_radius * cos_a)
+        nom_y = coil_radius * (-Xc * cos_theta_gpu + Zc * sin_theta_gpu * sin_a - coil_radius * sin_a)
+        nom_z = coil_radius * (-Yc * sin_theta_gpu * sin_a - Xc * sin_theta_gpu * cos_a)
 
-        # 数值积分 (对theta维度求和)
-        sx = d_theta * np.sum(nom_x / denominator, axis=-1)
-        sy = d_theta * np.sum(nom_y / denominator, axis=-1)
-        sz = d_theta * np.sum(nom_z / denominator, axis=-1)
+        sx = d_theta * torch.sum(nom_x / denominator, dim=-1)
+        sy = d_theta * torch.sum(nom_y / denominator, dim=-1)
+        sz = d_theta * torch.sum(nom_z / denominator, dim=-1)
 
-        # --- 6. 计算复数灵敏度 ---
-        # 计算yz平面上的角度
-        ang_y = sin_a * (Xc[..., 0] + coil_center[0]) - cos_a * (Yc[..., 0] + coil_center[1])
-        ang_z = Zc[..., 0]
-        yz_angle = np.angle(ang_y + 1j * ang_z)
+        ang_y = sin_a * (Xc.squeeze(-1) + coil_center[0]) - cos_a * (Yc.squeeze(-1) + coil_center[1])
+        ang_z = Zc.squeeze(-1)
+        yz_angle = torch.angle(ang_y + 1j * ang_z)
 
-        complex_sens = (cos_a * sx + sin_a * sy +
-                        1j * ((-sin_a * sx + cos_a * sy) * np.cos(yz_angle) + sz * np.sin(yz_angle)))
+        real_part = cos_a * sx + sin_a * sy
+        imag_part = (-sin_a * sx + cos_a * sy) * torch.cos(yz_angle) + sz * torch.sin(yz_angle)
 
-        sensitivity_maps[..., i] = complex_sens
+        sensitivity_maps[..., i] = torch.complex(real_part, imag_part)
 
-    # --- 7. 归一化 ---
-    mean_sens = np.mean(sensitivity_maps[sensitivity_maps != 0])
+    # --- 归一化 ---
+    mean_sens = torch.mean(sensitivity_maps[sensitivity_maps != 0])
     sensitivity_maps /= mean_sens
 
-    print("线圈灵敏度图谱计算完成。")
-    return sensitivity_maps
+    print("GPU计算完成。")
+
+    # --- 核心修改：传回CPU后，重排数组维度 ---
+    # 原始PyTorch/Numpy维度: (0:height, 1:width, 2:depth, 3:coils)
+    # 目标维度: (2:depth, 0:height, 1:width, 3:coils)
+    numpy_maps = sensitivity_maps.cpu().numpy()
+    return numpy_maps.transpose(2, 0, 1, 3)
 
 
 if __name__ == "__main__":
@@ -609,7 +607,7 @@ if __name__ == "__main__":
     log_path = os.path.join(base_path, case_name, "log")
 
     # 读取生成参数
-    dims, voxel_size = parse_xcat_log_from_path(log_path)
+    dims, voxel_size, = parse_xcat_log_from_path(log_path)
 
     # 生成静态参数
     lookup_table, max_vals_dict = create_tissue_property_lookup_table()
@@ -656,10 +654,13 @@ if __name__ == "__main__":
         image = generate_bssfp_signal(pd, t1, t2)
         image = apply_low_pass_filter(image, filter_strength=1.5)
 
+        image = apply_coil_sensitivities(image, coil_sens_maps=coil_maps)
+        image = (np.abs(image) ** 2).sum(axis=-1)
+        image = np.sqrt(image)
 
-
-        #        image = apply_coil_sensitivities(image, coil_sens_maps=t2s)
-
+        #for i in range(0, image.shape[3]):
+        #    output_filename = os.path.join(output_dir, f'{filename_without_ext}_coil{i}.nii.gz')
+        #    save_numpy_as_nifti(numpy_array=image[..., i], output_path=output_filename, voxel_size=voxel_size)
         save_numpy_as_nifti(numpy_array=image, output_path=output_filename, voxel_size=voxel_size)
 
         # # 保存矩阵
