@@ -1,6 +1,8 @@
 import os
 import re
 import glob
+import pstats
+import cProfile
 import numpy as np
 import nibabel as nib
 
@@ -177,12 +179,12 @@ def simplify_xcat_labels(xcat_array: np.ndarray) -> np.ndarray:
         raise TypeError("输入必须是一个Numpy数组。")
 
     # [cite_start]根据 phantomModel.py 中的定义，为不同组织创建布尔掩码 [cite: 2]
-    muscle_mask = np.sum([xcat_array == i for i in [1, 2, 3, 4, 10]], axis=0) > 0
-    blood_mask = np.sum([xcat_array == i for i in [5, 6, 7, 8]], axis=0) > 0
-    air_mask = np.sum([xcat_array == i for i in [0, 15, 16]], axis=0) > 0
-    liver_mask = np.sum([xcat_array == i for i in [13, 40, 41, 42, 43, 52]], axis=0) > 0
-    fat_mask = np.sum([xcat_array == i for i in [50, 99]], axis=0) > 0
-    bone_mask = np.sum([xcat_array == i for i in [31, 32, 33, 34, 35, 51]], axis=0) > 0
+    muscle_mask = np.isin(xcat_array, [1, 2, 3, 4, 10])
+    blood_mask = np.isin(xcat_array, [5, 6, 7, 8])
+    air_mask = np.isin(xcat_array, [0, 15, 16])
+    liver_mask = np.isin(xcat_array, [13, 40, 41, 42, 43, 52])
+    fat_mask = np.isin(xcat_array, [50, 99])
+    bone_mask = np.isin(xcat_array, [31, 32, 33, 34, 35, 51])
 
     # [cite_start]任何不属于上述已知类别的体素都将被标记为“未知” [cite: 2]
     known_mask = air_mask | muscle_mask | blood_mask | bone_mask | fat_mask | liver_mask
@@ -264,6 +266,8 @@ def assign_tissue_properties(simplified_array: np.ndarray, property_set: str = '
 if __name__ == "__main__":
     # --- 1. 配置图像和路径参数 ---
     # 图像元数据
+    profiler = cProfile.Profile()
+    profiler.enable()
 
     numpy_dtype = '<f4'  # 数据类型: 小端, 4字节浮点数
 
@@ -321,3 +325,5 @@ if __name__ == "__main__":
                         output_path=output_filename,
                         voxel_size=voxel_size
                     )
+
+    profiler.disable()
