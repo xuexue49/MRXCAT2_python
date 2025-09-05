@@ -204,10 +204,9 @@ def simplify_xcat_labels(xcat_array: np.ndarray) -> np.ndarray:
     return simplified_array
 
 
-def assign_tissue_properties(simplified_array: np.ndarray, property_set: str = 'ours') -> np.ndarray:
+def assign_tissue_properties(simplified_array: np.ndarray, property_set: str = 'ours') -> tuple:
     """
     为简化后的体模类别分配初步的、平滑的组织物理属性值。
-    该函数逻辑和物理参数值完全基于 phantomModel.py 文件。
 
     Args:
         simplified_array (np.ndarray): 由 simplify_xcat_labels 函数生成的、包含7个类别标签的数组。
@@ -215,51 +214,54 @@ def assign_tissue_properties(simplified_array: np.ndarray, property_set: str = '
                                       默认为 'ours'。
 
     Returns:
-        np.ndarray: 一个形状为 (..., 4) 的数组，最后一维代表归一化后的 [PD, T1, T2, T2*]。
+        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            返回一个包含四个Numpy数组的元组 (PD, T1, T2, T2*)。
     """
-    print(f"开始使用 '{property_set}' 属性集分配组织属性...")
+    print(f"开始使用 '{property_set}' 属性集分配组织属性 (优化版)...")
     if not isinstance(simplified_array, np.ndarray):
         raise TypeError("输入必须是一个Numpy数组。")
 
     # [cite_start]从 phantomModel.py 中提取的物理属性值 [cite: 2]
+    # 将属性值直接定义为Numpy数组，作为查找表 (Lookup Table)
     tissue_property_values = {}
     pd_max_ours, t1_max_ours, t2_max_ours, t2star_max_ours = 100., 1400., 285., 70.
-    tissue_property_values['ours'] = [
-        np.array([88. / pd_max_ours, 1000. / t1_max_ours, 43. / t2_max_ours, 28. / t2star_max_ours]),  # 0: Muscle
-        np.array([79. / pd_max_ours, 1387. / t1_max_ours, 280. / t2_max_ours, 66. / t2star_max_ours]),  # 1: Blood
-        np.array([34. / pd_max_ours, 1171. / t1_max_ours, 61. / t2_max_ours, 1. / t2star_max_ours]),  # 2: Air
-        np.array([87. / pd_max_ours, 661. / t1_max_ours, 57. / t2_max_ours, 34. / t2star_max_ours]),  # 3: Liver
-        np.array([60. / pd_max_ours, 250. / t1_max_ours, 70. / t2_max_ours, 39. / t2star_max_ours]),  # 4: Fat
-        np.array([71. / pd_max_ours, 250. / t1_max_ours, 20. / t2_max_ours, 1. / t2star_max_ours]),  # 5: Bone
-        np.array([65. / pd_max_ours, 750. / t1_max_ours, 60 / t2_max_ours, 30. / t2star_max_ours])  # 6: Unknown
-    ]
+    tissue_property_values['ours'] = np.array([
+        [88. / pd_max_ours, 1000. / t1_max_ours, 43. / t2_max_ours, 28. / t2star_max_ours],  # 0: Muscle
+        [79. / pd_max_ours, 1387. / t1_max_ours, 280. / t2_max_ours, 66. / t2star_max_ours],  # 1: Blood
+        [34. / pd_max_ours, 1171. / t1_max_ours, 61. / t2_max_ours, 1. / t2star_max_ours],  # 2: Air
+        [87. / pd_max_ours, 661. / t1_max_ours, 57. / t2_max_ours, 34. / t2star_max_ours],  # 3: Liver
+        [60. / pd_max_ours, 250. / t1_max_ours, 70. / t2_max_ours, 39. / t2star_max_ours],  # 4: Fat
+        [71. / pd_max_ours, 250. / t1_max_ours, 20. / t2_max_ours, 1. / t2star_max_ours],  # 5: Bone
+        [65. / pd_max_ours, 750. / t1_max_ours, 60 / t2_max_ours, 30. / t2star_max_ours]  # 6: Unknown
+    ])
 
     pd_max_xcat, t1_max_xcat, t2_max_xcat, t2star_max_xcat = 100., 1300., 105., 55.
-    tissue_property_values['xcat'] = [
-        np.array([80. / pd_max_xcat, 900. / t1_max_xcat, 50. / t2_max_xcat, 31. / t2star_max_xcat]),  # 0: Muscle
-        np.array([95. / pd_max_xcat, 1200. / t1_max_xcat, 100. / t2_max_xcat, 50. / t2star_max_xcat]),  # 1: Blood
-        np.array([34. / pd_max_xcat, 1171. / t1_max_xcat, 61. / t2_max_xcat, 1. / t2star_max_xcat]),  # 2: Air
-        np.array([90. / pd_max_xcat, 800. / t1_max_xcat, 50. / t2_max_xcat, 31. / t2star_max_xcat]),  # 3: Liver
-        np.array([70. / pd_max_xcat, 350. / t1_max_xcat, 30. / t2_max_xcat, 20. / t2star_max_xcat]),  # 4: Fat
-        np.array([12. / pd_max_xcat, 250. / t1_max_xcat, 20. / t2_max_xcat, 1. / t2star_max_xcat]),  # 5: Bone
-        np.array([70. / pd_max_xcat, 700. / t1_max_xcat, 50 / t2_max_xcat, 30. / t2star_max_xcat])  # 6: Unknown
-    ]
+    tissue_property_values['xcat'] = np.array([
+        [80. / pd_max_xcat, 900. / t1_max_xcat, 50. / t2_max_xcat, 31. / t2star_max_xcat],  # 0: Muscle
+        [95. / pd_max_xcat, 1200. / t1_max_xcat, 100. / t2_max_xcat, 50. / t2star_max_xcat],  # 1: Blood
+        [34. / pd_max_xcat, 1171. / t1_max_xcat, 61. / t2_max_xcat, 1. / t2star_max_xcat],  # 2: Air
+        [90. / pd_max_xcat, 800. / t1_max_xcat, 50. / t2_max_xcat, 31. / t2star_max_xcat],  # 3: Liver
+        [70. / pd_max_xcat, 350. / t1_max_xcat, 30. / t2_max_xcat, 20. / t2star_max_xcat],  # 4: Fat
+        [12. / pd_max_xcat, 250. / t1_max_xcat, 20. / t2_max_xcat, 1. / t2star_max_xcat],  # 5: Bone
+        [70. / pd_max_xcat, 700. / t1_max_xcat, 50 / t2_max_xcat, 30. / t2star_max_xcat]  # 6: Unknown
+    ])
+    # [cite_end]
 
     if property_set not in tissue_property_values:
         raise ValueError(f"属性集 '{property_set}' 无效, 请选择 'ours' 或 'xcat'。")
 
-    properties = tissue_property_values[property_set]
+    # 选择要使用的属性查找表
+    properties_lookup_table = tissue_property_values[property_set]
 
-    # 创建一个用于存储组织属性图 (Tissue Property Map, TPM) 的空数组
-    # 形状为 (height, width, depth, 4)
-    tpm_array = np.zeros(simplified_array.shape + (4,), dtype=float)
-
-    # [cite_start]使用Numpy广播机制高效地为每个类别赋值 [cite: 2]
-    for class_index in range(7):
-        # 找到所有等于当前类别索引的像素，并乘以对应的物理属性向量
-        tpm_array += (simplified_array[..., None] == class_index) * properties[class_index]
+    # --- 核心优化 ---
+    # 使用 simplified_array (值为0-6) 作为索引，
+    # 直接从 properties_lookup_table (形状为 7x4) 中为每个像素查找对应的4个属性值。
+    # NumPy会自动将结果广播到正确的输出形状 (height, width, depth, 4)。
+    tpm_array = properties_lookup_table[simplified_array]
 
     print("组织属性分配完成。")
+
+    # 返回分离后的四个属性图，与原函数输出保持一致
     return tpm_array[..., 0], tpm_array[..., 1], tpm_array[..., 2], tpm_array[..., 3]
 
 
@@ -323,3 +325,9 @@ if __name__ == "__main__":
         save_numpy_as_nifti(numpy_array=image_matrix, output_path=output_filename, voxel_size=voxel_size)
 
     profiler.disable()
+
+    # --- 格式化并打印分析报告 ---
+    with open("profile_stats.txt", "w") as f:
+        stats = pstats.Stats(profiler, stream=f)
+        stats.sort_stats('cumulative')  # 按累计时间排序
+        stats.print_stats()  # 打印所有统计信息
