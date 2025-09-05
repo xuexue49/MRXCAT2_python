@@ -5,6 +5,7 @@ import pstats
 import cProfile
 import numpy as np
 import nibabel as nib
+from scipy.ndimage import convolve
 
 
 def load_bin_as_numpy(bin_path, dims, numpy_dtype='<f4'):
@@ -345,6 +346,73 @@ def generate_bssfp_signal(pd: np.ndarray, t1: np.ndarray, t2: np.ndarray, tr: fl
     return signal_image
 
 
+def apply_low_pass_filter(image_3d: np.ndarray, filter_strength: float = 1.5) -> np.ndarray:
+    """
+    (轻微模糊) 对3D图像的每个2D切片应用一个低通滤波器。
+
+    此函数模仿 MRXCAT.m 中的 lowPassFilter 方法，使用一个圆盘平均核 (disk kernel)
+    来对图像进行轻微的模糊处理，以模拟部分容积效应或轻微的运动模糊。
+
+    Args:
+        image_3d (np.ndarray): 输入的3D单通道图像 (height, width, depth)。
+        filter_strength (float): 滤波器的强度，对应于圆盘核的半径。
+                                 值越大，模糊效果越强。
+
+    Returns:
+        np.ndarray: 经过模糊处理后的3D图像。
+    """
+    print(f"开始应用低通滤波 (模糊)，强度: {filter_strength}...")
+    if image_3d.ndim != 3:
+        raise ValueError("输入图像必须是3D数组 (height, width, depth)。")
+
+    # 创建一个圆盘形状的卷积核 (disk kernel)
+    radius = int(filter_strength)
+    y, x = np.ogrid[-radius:radius + 1, -radius:radius + 1]
+    kernel = np.array(x ** 2 + y ** 2 <= radius ** 2, dtype=np.float32)
+    kernel /= kernel.sum()  # 归一化，使其成为一个平均滤波器
+
+    # 创建一个用于存储结果的空数组
+    blurred_image = np.zeros_like(image_3d, dtype=image_3d.dtype)
+
+    # 对每个2D切片独立应用卷积
+    for i in range(image_3d.shape[2]):
+        blurred_image[..., i] = convolve(image_3d[..., i], kernel, mode='reflect')
+
+    print("低通滤波完成。")
+    return blurred_image
+
+
+def apply_coil_sensitivities(image_3d: np.ndarray, coil_sens_maps: np.ndarray) -> np.ndarray:
+    """
+    (线圈引入的亮度不均) 将多线圈灵敏度图谱应用到单通道图像上。
+
+    此函数模仿 MRXCAT.m 中的 multiplyCoilMaps 方法。它将一个单通道的理想
+    MR图像与每个接收线圈的灵敏度图进行逐元素相乘，生成一个多通道的图像，
+    每个通道代表一个线圈接收到的信号。
+
+    Args:
+        image_3d (np.ndarray): 输入的3D单通道图像 (height, width, depth)。
+        coil_sens_maps (np.ndarray): 4D的复数线圈灵敏度图谱，形状为
+                                     (height, width, depth, num_coils)。
+
+    Returns:
+        np.ndarray: 经过线圈效应调制的4D多通道复数图像。
+    """
+    print(f"开始应用 {coil_sens_maps.shape[-1]} 个线圈的灵敏度图谱...")
+    if image_3d.ndim != 3 or coil_sens_maps.ndim != 4:
+        raise ValueError("输入图像必须是3D，线圈图谱必须是4D。")
+    if image_3d.shape != coil_sens_maps.shape[:-1]:
+        raise ValueError("图像和线圈图谱的空间维度必须匹配。")
+
+    # 使用NumPy的广播机制 (broadcasting) 高效地完成操作
+    # image_3d[..., np.newaxis] 将其形状变为 (h, w, d, 1)
+    # 然后可以与 (h, w, d, num_coils) 的线圈图谱相乘
+    multi_coil_image = image_3d[..., np.newaxis] * coil_sens_maps
+
+    print("线圈灵敏度应用完成。")
+    return multi_coil_image
+
+
 if __name__ == "__main__":
     # --- 1. 配置图像和路径参数 ---
     # 图像元数据
@@ -404,6 +472,7 @@ if __name__ == "__main__":
         pd, t1, t2, t2s = assign_tissue_properties(image_matrix, lookup_table)
 
         image = generate_bssfp_signal(pd, t1, t2)
+        image = apply_low_pass_filter(image, filter_strength=1.5)
 
         save_numpy_as_nifti(numpy_array=image, output_path=output_filename, voxel_size=voxel_size)
 
