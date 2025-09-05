@@ -285,45 +285,45 @@ if __name__ == "__main__":
     # --- 2. 自动扫描并处理文件 ---
     # 检查输入目录是否存在
     if not os.path.isdir(input_dir):
-        print(f"错误：输入目录不存在 -> {input_dir}")
+        raise f"错误：输入目录不存在 -> {input_dir}"
     else:
         # 使用 glob 查找所有 .bin 文件，返回一个列表
         bin_files = glob.glob(os.path.join(input_dir, '*.bin'))
 
-        if not bin_files:
-            print(f"警告：在目录 '{input_dir}' 中没有找到任何 .bin 文件。")
-        else:
-            print(f"在 '{input_dir}' 中找到 {len(bin_files)} 个 .bin 文件，开始处理...")
-            # 排序文件以保证处理顺序一致
-            bin_files.sort()
+    if not bin_files:
+        raise f"警告：在目录 '{input_dir}' 中没有找到任何 .bin 文件。"
+    else:
+        print(f"在 '{input_dir}' 中找到 {len(bin_files)} 个 .bin 文件，开始处理...")
+        # 排序文件以保证处理顺序一致
+        bin_files.sort()
 
-            for input_filename in bin_files:
-                # 获取不带扩展名的基本文件名，例如 'act_1'
-                base_filename = os.path.basename(input_filename)
-                filename_without_ext = os.path.splitext(base_filename)[0]
+    for input_filename in bin_files:
+        # 获取不带扩展名的基本文件名，例如 'act_1'
+        base_filename = os.path.basename(input_filename)
+        filename_without_ext = os.path.splitext(base_filename)[0]
 
-                # 构建输出文件的完整路径
-                output_filename = os.path.join(output_dir, f'{filename_without_ext}.nii.gz')
+        # 构建输出文件的完整路径
+        output_filename = os.path.join(output_dir, f'{filename_without_ext}.nii.gz')
 
-                print(f"\n--- 正在处理: {base_filename} ---")
+        print(f"\n--- 正在处理: {base_filename} ---")
 
-                # 加载bin文件为Numpy矩阵
-                image_matrix = load_bin_as_numpy(
-                    bin_path=input_filename,
-                    dims=dims,
-                    numpy_dtype=numpy_dtype
-                )
+        # 加载bin文件为Numpy矩阵
+        image_matrix = load_bin_as_numpy(
+            bin_path=input_filename,
+            dims=dims,
+            numpy_dtype=numpy_dtype
+        )
 
-                # 检查矩阵是否成功加载，然后保存
-                if image_matrix is not None:
-                    print(f"成功加载矩阵，Shape: {image_matrix.shape}, Dtype: {image_matrix.dtype}")
+        # 检查矩阵是否成功加载，然后保存
+        if image_matrix is not None:
+            print(f"成功加载矩阵，Shape: {image_matrix.shape}, Dtype: {image_matrix.dtype}")
 
-                    image_matrix = simplify_xcat_labels(image_matrix)
+            image_matrix = simplify_xcat_labels(image_matrix)
 
-                    save_numpy_as_nifti(
-                        numpy_array=image_matrix,
-                        output_path=output_filename,
-                        voxel_size=voxel_size
-                    )
+            save_numpy_as_nifti(
+                numpy_array=image_matrix,
+                output_path=output_filename,
+                voxel_size=voxel_size
+            )
 
     profiler.disable()
