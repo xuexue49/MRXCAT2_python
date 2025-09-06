@@ -49,7 +49,7 @@ def load_bin_as_numpy(bin_path, dims, numpy_dtype='<f4'):
         image_shape = (dims[2], dims[1], dims[0])
         image_data_3d = raw_data_1d.reshape(image_shape)
 
-        return image_data_3d
+        return image_data_3d.transpose(2, 1, 0)
 
     except (FileNotFoundError, ValueError) as e:
         print(f"处理文件 '{bin_path}' 时发生错误: {e}")
@@ -208,7 +208,7 @@ def simplify_xcat_labels(xcat_array: np.ndarray) -> np.ndarray:
     return simplified_array
 
 
-def create_tissue_property_lookup_table(property_set: str = 'xcat', normalize: bool = False) -> tuple:
+def create_tissue_property_lookup_table(property_set: str = 'ours', normalize: bool = False) -> tuple:
     """
     创建组织属性的查找表 (Lookup Table)。
     此函数封装了所有物理参数的定义和计算，应在循环或多次调用前执行一次。
@@ -482,7 +482,7 @@ def _calculate_coil_centers(num_coils: int, coil_distance_mm: float, coils_per_r
 
 
 def calculate_coil_sensitivities(
-        image_shape: tuple, voxel_size_mm: tuple, num_coils: int, coil_distance_mm: float = 800.0,
+        image_shape: tuple, voxel_size_mm: tuple, num_coils: int, coil_distance_mm: float = 600.0,
         coils_per_row: int = 8, rotation_deg: tuple = (133, 38, 62), integration_angles: int = 60) -> np.ndarray:
     """
     根据Biot-Savart定律计算并生成3D多线圈灵敏度图谱。
@@ -585,7 +585,7 @@ def calculate_coil_sensitivities(
     # 原始PyTorch/Numpy维度: (0:height, 1:width, 2:depth, 3:coils)
     # 目标维度: (2:depth, 0:height, 1:width, 3:coils)
     numpy_maps = sensitivity_maps.cpu().numpy()
-    return numpy_maps.transpose(2, 0, 1, 3)
+    return numpy_maps
 
 
 if __name__ == "__main__":
@@ -610,7 +610,7 @@ if __name__ == "__main__":
 
     # 生成静态参数
     lookup_table, max_vals_dict = create_tissue_property_lookup_table()
-    coil_maps = calculate_coil_sensitivities(dims, voxel_size, 8)
+    coil_maps = calculate_coil_sensitivities(dims, voxel_size, 12)
 
     # --- 2. 自动扫描并处理文件 ---
     # 检查输入目录是否存在
