@@ -482,9 +482,8 @@ def _calculate_coil_centers(num_coils: int, coil_distance_mm: float, coils_per_r
 
 
 def calculate_coil_sensitivities(
-        image_shape: tuple, voxel_size_mm: tuple, num_coils: int, coil_distance_mm: float = 450.0,
-        coils_per_row: int = 8, rotation_deg: tuple = (0, 0, 0), integration_angles: int = 60
-) -> np.ndarray:
+        image_shape: tuple, voxel_size_mm: tuple, num_coils: int, coil_distance_mm: float = 800.0,
+        coils_per_row: int = 8, rotation_deg: tuple = (133, 38, 62), integration_angles: int = 60) -> np.ndarray:
     """
     根据Biot-Savart定律计算并生成3D多线圈灵敏度图谱。
     此函数是 MATLAB 'calculateCoilMaps' 方法的精确Python实现。
@@ -607,7 +606,7 @@ if __name__ == "__main__":
     log_path = os.path.join(base_path, case_name, "log")
 
     # 读取生成参数
-    dims, voxel_size, = parse_xcat_log_from_path(log_path)
+    dims, voxel_size = parse_xcat_log_from_path(log_path)
 
     # 生成静态参数
     lookup_table, max_vals_dict = create_tissue_property_lookup_table()
@@ -657,6 +656,7 @@ if __name__ == "__main__":
         image = apply_coil_sensitivities(image, coil_sens_maps=coil_maps)
         image = (np.abs(image) ** 2).sum(axis=-1)
         image = np.sqrt(image)
+        image = image.astype(np.int32)
 
         #for i in range(0, image.shape[3]):
         #    output_filename = os.path.join(output_dir, f'{filename_without_ext}_coil{i}.nii.gz')
