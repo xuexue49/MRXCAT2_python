@@ -90,7 +90,7 @@ if __name__ == "__main__":
                 simplified_tensor = tissue_process.simplify_xcat_labels(image_tensor)
                 pd, t1, t2, t2s = tissue_process.assign_tissue_properties(simplified_tensor)
                 pd, t1, t2, _ = texture_generator.apply(pd, t1, t2, t2s, tissue_process)
-                pd, t1, t2 = texture_generator.normalize_properties(pd, t1, t2, simplified_tensor)
+#                pd, t1, t2 = texture_generator.normalize_properties(pd, t1, t2, simplified_tensor)
 
                 image = generate_bssfp_signal(pd, t1, t2)
                 image = apply_low_pass_filter(image, filter_strength=1.5)
