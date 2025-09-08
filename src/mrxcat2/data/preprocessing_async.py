@@ -4,6 +4,8 @@ import os
 import pstats
 import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+
 
 import numpy as np
 import torch
@@ -21,8 +23,9 @@ if __name__ == "__main__":
     start_time = time.time()
 
     # --- 1. 配置全局参数 ---
+    home_path = Path.home()
     numpy_dtype = '<f4'
-    base_path = "/home/chenxinpeng/MRXCAT2_python/raw_data"
+    base_path = f"{home_path}/MRXCAT2_python/raw_data"
     case_name = "Patient1"
 
     input_dir = os.path.join(base_path, case_name, "xcat_bin")
@@ -31,7 +34,7 @@ if __name__ == "__main__":
     log_path = os.path.join(base_path, case_name, "log")
 
     # 权重路径
-    texture_model_path = "/home/chenxinpeng/MRXCAT2_python/src/LAXsegnet"
+    texture_model_path = f"{home_path}/MRXCAT2_python/src/LAXsegnet"
 
     if not os.path.isdir(input_dir):
         raise FileNotFoundError(f"错误：输入目录不存在 -> {input_dir}")
