@@ -9,7 +9,7 @@ from scipy.ndimage import convolve
 import numpy as np
 
 from mrxcat2.io.utils import load_bin_as_numpy, save_numpy_as_nifti, parse_xcat_log_from_path
-from mrxcat2.phantom.tissue import simplify_xcat_labels, create_tissue_property_lookup_table, assign_tissue_properties
+from mrxcat2.phantom.tissue import TissueProcessor
 
 
 def generate_bssfp_signal(pd: np.ndarray, t1: np.ndarray, t2: np.ndarray, tr: float = 3.0, te: float = 1.5,
@@ -315,6 +315,8 @@ if __name__ == "__main__":
     base_path = "/home/chenxinpeng/MRXCAT2_python/raw_data"
     case_name = "Patient1"
 
+    tissue_process = TissueProcessor(property_set='ours', normalize=False)
+
     # 根据新要求构建输入和输出目录
     input_dir = os.path.join(base_path, case_name, "xcat_bin")
     output_dir = os.path.join(base_path, case_name, "mask")
@@ -324,7 +326,6 @@ if __name__ == "__main__":
     dims, voxel_size, rotation_deg = parse_xcat_log_from_path(log_path)
 
     # 生成静态参数
-    lookup_table, max_vals_dict = create_tissue_property_lookup_table()
     coil_maps = calculate_coil_sensitivities(dims, voxel_size, 12, rotation_deg=rotation_deg)
 
     # --- 2. 自动扫描并处理文件 ---
@@ -362,8 +363,8 @@ if __name__ == "__main__":
             print(f"成功加载矩阵，Shape: {image_matrix.shape}, Dtype: {image_matrix.dtype}")
 
         # 图像生成逻辑
-        image_matrix = simplify_xcat_labels(image_matrix)
-        pd, t1, t2, t2s = assign_tissue_properties(image_matrix, lookup_table)
+        image_matrix = tissue_process.simplify_xcat_labels(image_matrix)
+        pd, t1, t2, t2s = tissue_process.assign_tissue_properties(image_matrix)
 
         image = generate_bssfp_signal(pd, t1, t2)
         image = apply_low_pass_filter(image, filter_strength=1.5)
