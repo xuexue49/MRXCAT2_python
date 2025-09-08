@@ -10,6 +10,7 @@ import torch
 
 from mrxcat2.io.utils import load_bin_as_numpy, save_numpy_as_nifti, parse_xcat_log_from_path
 from mrxcat2.phantom.tissue import TissueProcessor
+from mrxcat2.phantom.texture import TextureGenerator
 from mrxcat2.simulation.coils import calculate_coil_sensitivities
 from mrxcat2.simulation.mr_signal import generate_bssfp_signal, apply_low_pass_filter, apply_coil_sensitivities
 
@@ -28,6 +29,9 @@ if __name__ == "__main__":
     image_dir = os.path.join(base_path, case_name, "image")
     mask_dir = os.path.join(base_path, case_name, "mask")
     log_path = os.path.join(base_path, case_name, "log")
+
+    # 权重路径
+    texture_model_path = "/home/chenxinpeng/MRXCAT2_python/src/LAXsegnet"
 
     if not os.path.isdir(input_dir):
         raise FileNotFoundError(f"错误：输入目录不存在 -> {input_dir}")
@@ -52,7 +56,11 @@ if __name__ == "__main__":
         print(f"线圈图谱已保存至: {coil_maps_path}")
         coil_maps = coil_maps.to(device)
 
+    # b. 加载组织处理器
     tissue_process = TissueProcessor(property_set='ours', normalize=False)
+
+    # c. 加载纹理生成器
+    texture_generator = TextureGenerator(model_path=texture_model_path, device=device)
 
     # --- 4. 扫描文件并开始处理循环 ---
     bin_files = sorted(glob.glob(os.path.join(input_dir, '*.bin')))
@@ -80,7 +88,9 @@ if __name__ == "__main__":
                 # --- GPU 计算流水线 ---
                 image_tensor = torch.from_numpy(image_matrix).int().to(device)
                 simplified_tensor = tissue_process.simplify_xcat_labels(image_tensor)
-                pd, t1, t2, _ = tissue_process.assign_tissue_properties(simplified_tensor)
+                pd, t1, t2, t2s = tissue_process.assign_tissue_properties(simplified_tensor)
+                pd, t1, t2, _ = texture_generator.apply(pd, t1, t2, t2s, tissue_process)
+                pd, t1, t2 = texture_generator.normalize_properties(pd, t1, t2, simplified_tensor)
 
                 image = generate_bssfp_signal(pd, t1, t2)
                 image = apply_low_pass_filter(image, filter_strength=1.5)
