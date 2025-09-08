@@ -25,13 +25,14 @@ if __name__ == "__main__":
     case_name = "Patient1"
 
     input_dir = os.path.join(base_path, case_name, "xcat_bin")
-    output_dir = os.path.join(base_path, case_name, "mask")
+    image_dir = os.path.join(base_path, case_name, "image")
+    mask_dir = os.path.join(base_path, case_name, "mask")
     log_path = os.path.join(base_path, case_name, "log")
 
     if not os.path.isdir(input_dir):
         raise FileNotFoundError(f"错误：输入目录不存在 -> {input_dir}")
 
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(image_dir, exist_ok=True)
 
     # --- 2. 设置GPU设备并读取元数据 ---
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -68,9 +69,13 @@ if __name__ == "__main__":
 
                 # --- CPU加载 ---
                 image_matrix = load_bin_as_numpy(bin_path=input_filename, dims=dims, numpy_dtype=numpy_dtype)
+
                 if image_matrix is None:
                     print(f"警告：未能为 {base_filename} 加载矩阵，跳过此文件。")
                     continue
+
+                output_filename = os.path.join(mask_dir, f'{os.path.splitext(base_filename)[0]}.nii.gz')
+                executor.submit(save_numpy_as_nifti, image_matrix, output_filename, voxel_size)
 
                 # --- GPU 计算流水线 ---
                 image_tensor = torch.from_numpy(image_matrix).int().to(device)
@@ -88,7 +93,7 @@ if __name__ == "__main__":
 
                 # --- 异步提交保存任务 ---
                 # 主循环不会在此等待，会立刻开始处理下一个文件
-                output_filename = os.path.join(output_dir, f'{os.path.splitext(base_filename)[0]}.nii.gz')
+                output_filename = os.path.join(image_dir, f'{os.path.splitext(base_filename)[0]}.nii.gz')
                 executor.submit(save_numpy_as_nifti, final_image_numpy, output_filename, voxel_size)
 
             # with语句结束时，会自动等待所有提交的任务完成
