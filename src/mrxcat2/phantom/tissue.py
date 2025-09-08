@@ -88,7 +88,8 @@ class TissueProcessor:
 
         return lookup_table, max_vals_dict
 
-    def _create_simplification_lut(self) -> np.ndarray:
+    @staticmethod
+    def _create_simplification_lut() -> np.ndarray:
         """
         (私有方法) 创建并返回用于简化XCAT标签的查找表。
         XCAT标签的最大值是99，所以我们创建一个大小为100的LUT。

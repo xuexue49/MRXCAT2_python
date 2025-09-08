@@ -75,9 +75,13 @@ if __name__ == "__main__":
         image_matrix = tissue_process.simplify_xcat_labels(image_matrix)
         pd, t1, t2, t2s = tissue_process.assign_tissue_properties(image_matrix)
 
+        # 计算bssfp信号
         image = generate_bssfp_signal(pd, t1, t2)
+
+        # 模拟容积效应
         image = apply_low_pass_filter(image, filter_strength=1.5)
 
+        # 模拟线圈灵敏度
         image = apply_coil_sensitivities(image, coil_sens_maps=coil_maps)
 
         image = torch.abs(image) ** 2
