@@ -112,26 +112,22 @@ class TissueProcessor:
         if not isinstance(xcat_array, np.ndarray):
             raise TypeError("输入必须是一个Numpy数组。")
 
-        # 根据 phantomModel.py 中的定义，为不同组织创建布尔掩码
-        muscle_mask = np.isin(xcat_array, [1, 2, 3, 4, 10])
-        blood_mask = np.isin(xcat_array, [5, 6, 7, 8])
-        air_mask = np.isin(xcat_array, [0, 15, 16])
-        liver_mask = np.isin(xcat_array, [13, 40, 41, 42, 43, 52])
-        fat_mask = np.isin(xcat_array, [50, 99])
-        bone_mask = np.isin(xcat_array, [31, 32, 33, 34, 35, 51])
+        # 创建一个查找表 (LUT)
+        # XCAT标签的最大值是99，所以我们创建一个大小为100的LUT
+        xcat_array = xcat_array.astype(int)
+        max_label = 100
+        lut = np.full(max_label + 1, 6, dtype=np.int32)  # 默认值为6 (Unknown)
 
-        # 任何不属于上述已知类别的体素都将被标记为“未知”
-        known_mask = air_mask | muscle_mask | blood_mask | bone_mask | fat_mask | liver_mask
-        unknown_mask = ~known_mask
+        # 根据映射关系填充LUT
+        lut[[1, 2, 3, 4, 10]] = 0  # Muscle
+        lut[[5, 6, 7, 8]] = 1  # Blood
+        lut[[0, 15, 16]] = 2  # Air
+        lut[[13, 40, 41, 42, 43, 52]] = 3  # Liver
+        lut[[50, 99]] = 4  # Fat
+        lut[[31, 32, 33, 34, 35, 51]] = 5  # Bone
 
-        # 默认值为0 (Muscle)，然后用其他类别的值覆盖
-        simplified_array = np.zeros_like(xcat_array, dtype=np.int32)
-        simplified_array[blood_mask] = 1
-        simplified_array[air_mask] = 2
-        simplified_array[liver_mask] = 3
-        simplified_array[fat_mask] = 4
-        simplified_array[bone_mask] = 5
-        simplified_array[unknown_mask] = 6
+        # 使用LUT进行映射
+        simplified_array = lut[xcat_array]
 
         print("标签简化完成。")
         return simplified_array
