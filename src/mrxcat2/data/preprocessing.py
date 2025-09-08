@@ -4,6 +4,7 @@ import os
 import pstats
 
 import numpy as np
+import torch
 
 from mrxcat2.io.utils import load_bin_as_numpy, save_numpy_as_nifti, parse_xcat_log_from_path
 from mrxcat2.phantom.tissue import TissueProcessor
@@ -77,8 +78,10 @@ if __name__ == "__main__":
         image = apply_low_pass_filter(image, filter_strength=1.5)
 
         image = apply_coil_sensitivities(image, coil_sens_maps=coil_maps)
-        image = (np.abs(image) ** 2).sum(axis=-1)
-        image = np.sqrt(image)
+
+        image = torch.abs(image) ** 2
+        image = image.sum(axis=-1)
+        image = torch.sqrt(image).cpu().numpy()
         image = image.astype(np.int32)
 
         #for i in range(0, image.shape[3]):

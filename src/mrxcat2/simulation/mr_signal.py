@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from scipy.ndimage import convolve
 
 
@@ -116,7 +117,9 @@ def apply_coil_sensitivities(image_3d: np.ndarray, coil_sens_maps: np.ndarray) -
     # 使用NumPy的广播机制 (broadcasting) 高效地完成操作
     # image_3d[..., np.newaxis] 将其形状变为 (h, w, d, 1)
     # 然后可以与 (h, w, d, num_coils) 的线圈图谱相乘
-    multi_coil_image = image_3d[..., np.newaxis] * coil_sens_maps
+    image_3d = torch.tensor(image_3d).cuda().unsqueeze(-1)
+    multi_coil_image = image_3d * coil_sens_maps
 
     print("线圈灵敏度应用完成。")
     return multi_coil_image
+

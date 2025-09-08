@@ -165,10 +165,8 @@ def calculate_coil_sensitivities(
     mean_sens = torch.mean(sensitivity_maps[sensitivity_maps != 0])
     sensitivity_maps /= mean_sens
 
-    print("GPU计算完成。")
-
     # --- 核心修改：传回CPU后，重排数组维度 ---
     # 原始PyTorch/Numpy维度: (0:height, 1:width, 2:depth, 3:coils)
     # 目标维度: (2:depth, 0:height, 1:width, 3:coils)
-    numpy_maps = sensitivity_maps.cpu().numpy()
-    return numpy_maps
+    # numpy_maps = sensitivity_maps.cpu().numpy()
+    return sensitivity_maps
