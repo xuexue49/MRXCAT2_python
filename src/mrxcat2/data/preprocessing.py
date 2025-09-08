@@ -2,6 +2,7 @@ import cProfile
 import glob
 import os
 import pstats
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -20,7 +21,8 @@ if __name__ == "__main__":
     numpy_dtype = '<f4'  # 数据类型: 小端, 4字节浮点数
 
     # 路径参数
-    base_path = "/home/chenxinpeng/MRXCAT2_python/raw_data"
+    home_path = Path.home()
+    base_path = f"{home_path}/MRXCAT2_python/raw_data"
     case_name = "Patient1"
 
     tissue_process = TissueProcessor(property_set='ours', normalize=False)
