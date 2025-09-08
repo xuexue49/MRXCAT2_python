@@ -63,6 +63,7 @@ if __name__ == "__main__":
 
         # 加载bin文件为Numpy矩阵
         image_matrix = load_bin_as_numpy(bin_path=input_filename, dims=dims, numpy_dtype=numpy_dtype)
+        image_matrix = torch.Tensor(image_matrix).int().cuda()
 
         # 检查矩阵是否成功加载
         if image_matrix is None:
