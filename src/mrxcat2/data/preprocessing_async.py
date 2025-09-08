@@ -87,6 +87,7 @@ if __name__ == "__main__":
                 image = apply_coil_sensitivities(image, coil_sens_maps=coil_maps)
 
                 # GPU后处理并传回CPU
+                # noinspection PyArgumentList
                 final_image_numpy = torch.sqrt(torch.sum(torch.abs(image) ** 2, axis=-1)).cpu().numpy().astype(np.int8)
 
                 print(f"--- 计算完成: {base_filename}，提交至后台保存... ---")
